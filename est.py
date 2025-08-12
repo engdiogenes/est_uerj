@@ -16,7 +16,7 @@ if 'user_custom_name' not in st.session_state:
 # --- Conteúdo Principal da Aplicação ---
 st.title("📊 Resolução exercícios - Estatística Avançada - UERJ")
 st.write(f"Esta aplicação demonstra a resolução dos exercícios de testes estatísticos que você me apresentou, utilizando Python e Streamlit.")
-st.write("Explore as análises e visualize os resultados de cada cenário.")
+st.write("Eng Diógenes Oliveira")
 
 st.markdown("---")
 
@@ -254,3 +254,4 @@ if __name__ == "__main__":
         """
 
     )
+
