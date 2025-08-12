@@ -14,8 +14,8 @@ if 'user_custom_name' not in st.session_state:
     st.session_state.user_custom_name = "Diógenes Oliveira" # Pode ser seu nome real ou um placeholder
 
 # --- Conteúdo Principal da Aplicação ---
-st.title("📊 Aplicação de Análise Estatística para Engenheiros")
-st.write(f"Olá, {st.session_state.user_custom_name}! Esta aplicação demonstra a resolução dos exercícios de testes estatísticos que você me apresentou, utilizando Python e Streamlit.")
+st.title("📊 Resolução exercícios - Estatística Avançada - UERJ")
+st.write(f"Esta aplicação demonstra a resolução dos exercícios de testes estatísticos que você me apresentou, utilizando Python e Streamlit.")
 st.write("Explore as análises e visualize os resultados de cada cenário.")
 
 st.markdown("---")
@@ -250,6 +250,7 @@ if __name__ == "__main__":
         - Matplotlib e Seaborn (para visualização)
         - SciPy e Statsmodels (para os testes estatísticos)
 
-        Espero que seja útil em seus estudos e projetos, Diógenes!
+       
         """
+
     )
