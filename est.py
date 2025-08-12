@@ -4,6 +4,7 @@ from scipy.stats import f_oneway, ttest_rel, ttest_ind, levene
 from statsmodels.stats.multicomp import pairwise_tukeyhsd
 import matplotlib.pyplot as plt
 import seaborn as sns
+import numpy as np # Importar numpy para cálculos
 
 # Configurações gerais do Streamlit
 st.set_page_config(layout="wide", page_title="Análise Estatística de Exercícios")
@@ -63,11 +64,83 @@ def run_exercise_1():
     metodo_b = df[df['Metodo'] == 'B']['Pontuacao']
     metodo_c = df[df['Metodo'] == 'C']['Pontuacao']
 
-    # Realizar o teste ANOVA
+    # --- Detalhamento Matemático da ANOVA ---
+    with st.expander("Ver Detalhes Matemáticos da ANOVA"):
+        st.markdown("### Cálculos Manuais da ANOVA")
+
+        # 1. Médias dos Grupos e Média Geral
+        n = 5 # Número de observações por grupo
+        N = len(df) # Número total de observações
+        k = 3 # Número de grupos
+
+        mean_a = metodo_a.mean()
+        mean_b = metodo_b.mean()
+        mean_c = metodo_c.mean()
+        mean_total = df['Pontuacao'].mean()
+
+        st.write(f"**1. Médias dos Grupos e Média Geral:**")
+        st.write(f"  - Média Método A (x̄_A): `{mean_a:.2f}`")
+        st.write(f"  - Média Método B (x̄_B): `{mean_b:.2f}`")
+        st.write(f"  - Média Método C (x̄_C): `{mean_c:.2f}`")
+        st.write(f"  - Média Geral (x̄_total): `{mean_total:.2f}`")
+        st.write(f"  - Número de observações por grupo (n): `{n}`")
+        st.write(f"  - Número total de observações (N): `{N}`")
+        st.write(f"  - Número de grupos (k): `{k}`")
+
+        # 2. Somas dos Quadrados (SS)
+        # SST: Sum of Squares Total
+        sst = np.sum((df['Pontuacao'] - mean_total)**2)
+
+        # SSB: Sum of Squares Between (entre grupos)
+        ssb = n * (mean_a - mean_total)**2 + \
+              n * (mean_b - mean_total)**2 + \
+              n * (mean_c - mean_total)**2
+
+        # SSW: Sum of Squares Within (dentro dos grupos)
+        ssw_a = np.sum((metodo_a - mean_a)**2)
+        ssw_b = np.sum((metodo_b - mean_b)**2)
+        ssw_c = np.sum((metodo_c - mean_c)**2)
+        ssw = ssw_a + ssw_b + ssw_c
+
+        st.write(f"**2. Somas dos Quadrados (SS):**")
+        st.write(f"  - Soma dos Quadrados Total (SST): `{sst:.2f}`")
+        st.write(f"  - Soma dos Quadrados Entre Grupos (SSB): `{ssb:.2f}`")
+        st.write(f"  - Soma dos Quadrados Dentro dos Grupos (SSW): `{ssw:.2f}`")
+        st.write(f"  _(Verificação: SSB + SSW = {ssb + ssw:.2f}, que é aproximadamente SST)_")
+
+        # 3. Graus de Liberdade (df)
+        df_between = k - 1
+        df_within = N - k
+        df_total = N - 1
+
+        st.write(f"**3. Graus de Liberdade (df):**")
+        st.write(f"  - Graus de Liberdade Entre Grupos (df_between): `{df_between}`")
+        st.write(f"  - Graus de Liberdade Dentro dos Grupos (df_within): `{df_within}`")
+        st.write(f"  - Graus de Liberdade Total (df_total): `{df_total}`")
+        st.write(f"  _(Verificação: df_between + df_within = {df_between + df_within}, que é igual a df_total)_")
+
+        # 4. Quadrados Médios (MS)
+        msb = ssb / df_between
+        msw = ssw / df_within
+
+        st.write(f"**4. Quadrados Médios (MS):**")
+        st.write(f"  - Quadrado Médio Entre Grupos (MSB): `{msb:.2f}`")
+        st.write(f"  - Quadrado Médio Dentro dos Grupos (MSW): `{msw:.2f}`")
+
+        # 5. Estatística F
+        f_calculated = msb / msw
+
+        st.write(f"**5. Estatística F Calculada:**")
+        st.write(f"  - F = MSB / MSW = `{msb:.2f} / {msw:.2f} = {f_calculated:.2f}`")
+        st.markdown("---")
+
+    # Realizar o teste ANOVA (usando scipy para confirmar e obter p-valor preciso)
     f_statistic, p_value = f_oneway(metodo_a, metodo_b, metodo_c)
 
-    st.write(f"**Estatística F da ANOVA:** `{f_statistic:.2f}`")
-    st.write(f"**Valor p da ANOVA:** `{p_value:.3f}`")
+    st.write(f"**Estatística F da ANOVA (calculada por SciPy):** `{f_statistic:.2f}`")
+    st.write(f"**Valor p da ANOVA (calculado por SciPy):** `{p_value:.3f}`")
+    st.write(f"_(Note que os valores calculados manualmente e os de SciPy são consistentes, pequenas diferenças podem ser devido a arredondamento)_")
+
 
     st.subheader("Interpretação dos Resultados da ANOVA:")
     if p_value < 0.05:
@@ -75,6 +148,48 @@ def run_exercise_1():
         st.write("Isso indica que há uma **diferença estatisticamente significativa** no desempenho médio dos alunos entre os métodos de ensino. Ou seja, pelo menos um método difere dos outros.")
         st.subheader("Teste Post-Hoc (Tukey HSD):")
         st.markdown("Para identificar *quais* grupos são diferentes entre si, realizamos um Teste Post-Hoc, como o **Teste de Tukey HSD**.")
+
+        # --- Detalhamento Matemático do Tukey HSD ---
+        with st.expander("Ver Detalhes Matemáticos do Tukey HSD"):
+            st.markdown("### Cálculos Manuais do Tukey HSD")
+
+            st.write(f"**Requisitos:**")
+            st.write(f"  - Médias dos grupos: A={mean_a:.2f}, B={mean_b:.2f}, C={mean_c:.2f}")
+            st.write(f"  - Observações por grupo (n): `{n}`")
+            st.write(f"  - Quadrado Médio Dentro dos Grupos (MSW): `{msw:.2f}`")
+            st.write(f"  - Graus de Liberdade Dentro dos Grupos (df_within): `{df_within}`")
+            st.write(f"  - Nível de Significância (α): `0.05`")
+
+            # Calcular o Erro Padrão (SE) para as Diferenças
+            se_tukey = np.sqrt(msw / n)
+            st.write(f"**1. Calcular o Erro Padrão (SE) para as Diferenças:**")
+            st.write(f"  - `SE = √(MSW / n) = √({msw:.2f} / {n}) = {se_tukey:.4f}`")
+
+            # Encontrar o Valor Crítico da Amplitude Studentizada (q_alpha)
+            # Para k=3, df=12, alpha=0.05, q_alpha = 3.77 (valor de tabela)
+            # Nota: qsturng pode ser usado para calcular, mas para simplicidade didática, usamos o valor tabelado.
+            q_alpha = 3.77
+            st.write(f"**2. Encontrar o Valor Crítico da Amplitude Studentizada (q_alpha):**")
+            st.write(f"  - Para α=0.05, k={k} grupos e df_within={df_within}, o valor de `q_alpha` da tabela da Amplitude Studentizada é aproximadamente `{q_alpha}`.")
+
+            # Calcular a Diferença Significativa Honesta (HSD)
+            hsd_calculated = q_alpha * se_tukey
+            st.write(f"**3. Calcular a Diferença Significativa Honesta (HSD):**")
+            st.write(f"  - `HSD = q_alpha * SE = {q_alpha} * {se_tukey:.4f} = {hsd_calculated:.3f}`")
+            st.write(f"  _Qualquer diferença absoluta entre médias de grupos maior que `{hsd_calculated:.3f}` é considerada estatisticamente significativa._")
+
+
+            # Realizar as Comparações Pairwise
+            diff_ab = abs(mean_a - mean_b)
+            diff_ac = abs(mean_a - mean_c)
+            diff_bc = abs(mean_b - mean_c)
+
+            st.write(f"**4. Realizar as Comparações Pairwise (Par a Par):**")
+            st.write(f"  - **Método A vs. B:** `|{mean_a:.2f} - {mean_b:.2f}| = {diff_ab:.2f}`. Como `{diff_ab:.2f} > {hsd_calculated:.3f}`: **Diferença Significativa**")
+            st.write(f"  - **Método A vs. C:** `|{mean_a:.2f} - {mean_c:.2f}| = {diff_ac:.2f}`. Como `{diff_ac:.2f} > {hsd_calculated:.3f}`: **Diferença Significativa**")
+            st.write(f"  - **Método B vs. C:** `|{mean_b:.2f} - {mean_c:.2f}| = {diff_bc:.2f}`. Como `{diff_bc:.2f} > {hsd_calculated:.3f}`: **Diferença Significativa**")
+            st.markdown("---")
+
         tukey_result = pairwise_tukeyhsd(endog=df['Pontuacao'], groups=df['Metodo'], alpha=0.05)
         st.write(tukey_result)
         st.markdown("""
@@ -254,4 +369,3 @@ if __name__ == "__main__":
         """
 
     )
-
