@@ -2,9 +2,13 @@ import streamlit as st
 import pandas as pd
 from scipy.stats import f_oneway, ttest_rel, ttest_ind, levene
 from statsmodels.stats.multicomp import pairwise_tukeyhsd
-import matplotlib.pyplot as plt
-import seaborn as sns
+import matplotlib.pyplot as plt # Mantemos por enquanto para o layout geral do Streamlit, mas os plots serão Plotly
+import seaborn as sns # Mantemos por enquanto
 import numpy as np # Importar numpy para cálculos
+
+# Importar Plotly para gráficos interativos
+import plotly.express as px
+import plotly.graph_objects as go # Necessário para o gráfico de mudança individual do Ex. 2
 
 # Configurações gerais do Streamlit
 st.set_page_config(layout="wide", page_title="Análise Estatística de Exercícios")
@@ -40,15 +44,16 @@ def run_exercise_1():
     st.subheader("Dados Brutos:")
     st.dataframe(df)
 
-    st.subheader("Visualização dos Dados (Box Plot):")
-    fig1, ax1 = plt.subplots(figsize=(10, 6))
-    sns.boxplot(x='Metodo', y='Pontuacao', data=df, ax=ax1, palette='viridis')
-    ax1.set_title('Desempenho dos Alunos por Método de Ensino')
-    ax1.set_xlabel('Método de Ensino')
-    ax1.set_ylabel('Pontuação')
-    ax1.grid(axis='y', linestyle='--', alpha=0.7)
-    st.pyplot(fig1)
-    st.write("O box plot nos permite visualizar a distribuição das pontuações para cada método, incluindo medianas, quartis e possíveis outliers. Isso dá uma primeira impressão das diferenças.")
+    st.subheader("Visualização dos Dados (Box Plot - Interativo):")
+    # Gráfico de Box Plot interativo com Plotly Express
+    fig_plotly1 = px.box(df, x='Metodo', y='Pontuacao',
+                         title='Desempenho dos Alunos por Método de Ensino',
+                         labels={'Metodo': 'Método de Ensino', 'Pontuacao': 'Pontuação'},
+                         color='Metodo', # Colore as caixas por método
+                         template="plotly_white") # Define um template limpo
+    fig_plotly1.update_traces(boxpoints='all', jitter=0.3) # Mostra os pontos individuais (jitter)
+    st.plotly_chart(fig_plotly1, use_container_width=True) # Exibe o gráfico no Streamlit
+    st.write("O box plot interativo nos permite visualizar a distribuição das pontuações para cada método, incluindo medianas, quartis e pontos individuais. Passe o mouse sobre as caixas e pontos para ver detalhes.")
 
     st.subheader("Análise Estatística: ANOVA")
     st.markdown("""
@@ -138,7 +143,7 @@ def run_exercise_1():
     f_statistic, p_value = f_oneway(metodo_a, metodo_b, metodo_c)
 
     st.write(f"**Estatística F da ANOVA (calculada por SciPy):** `{f_statistic:.2f}`")
-    st.write(f"**Valor p da ANOVA (calculado por SciPy):** `{p_value:.3f}`")
+    st.write(f"**Valor p da ANOVA (calculada por SciPy):** `{p_value:.3f}`")
     st.write(f"_(Note que os valores calculados manualmente e os de SciPy são consistentes, pequenas diferenças podem ser devido a arredondamento)_")
 
 
@@ -222,20 +227,34 @@ def run_exercise_2():
     st.subheader("Dados Brutos:")
     st.dataframe(df_prog)
 
-    st.subheader("Visualização dos Dados (Mudança Individual Pré-Pós):")
-    fig2, ax2 = plt.subplots(figsize=(10, 6))
+    st.subheader("Visualização dos Dados (Mudança Individual Pré-Pós - Interativo):")
+    # Gráfico interativo de mudança individual com Plotly Graph Objects
+    fig_plotly2 = go.Figure()
     for index, row in df_prog.iterrows():
-        ax2.plot([0, 1], [row['Pre'], row['Pos']], color='gray', linestyle='-', marker='o', alpha=0.6)
-        ax2.text(0, row['Pre'], f"({row['Pre']})", ha='right', va='center', fontsize=8, color='blue')
-        ax2.text(1, row['Pos'], f"({row['Pos']})", ha='left', va='center', fontsize=8, color='green')
-    ax2.set_xticks([0, 1])
-    ax2.set_xticklabels(['Pré-Programa', 'Pós-Programa'])
-    ax2.set_xlim(-0.1, 1.1)
-    ax2.set_title('Mudança na Pontuação de Matemática por Aluno')
-    ax2.set_ylabel('Pontuação')
-    ax2.grid(axis='y', linestyle='--', alpha=0.7)
-    st.pyplot(fig2)
-    st.write("Este gráfico mostra a mudança individual para cada aluno. Uma linha ascendente indica melhora, descendente indica piora.")
+        fig_plotly2.add_trace(go.Scatter(
+            x=['Pré-Programa', 'Pós-Programa'],
+            y=[row['Pre'], row['Pos']],
+            mode='lines+markers',
+            name=f"Aluno {row['Aluno']}",
+            line=dict(color='gray', width=1),
+            marker=dict(size=8),
+            hovertemplate=
+                "<b>Aluno:</b> %{text}<br>" +
+                "<b>Fase:</b> %{x}<br>" +
+                "<b>Pontuação:</b> %{y}<extra></extra>", # Adiciona o nome do Aluno no hover
+            text=[f"Aluno {row['Aluno']}", f"Aluno {row['Aluno']}"]
+        ))
+
+    fig_plotly2.update_layout(
+        title='Mudança na Pontuação de Matemática por Aluno',
+        xaxis_title='Período',
+        yaxis_title='Pontuação',
+        hovermode="x unified", # Melhor hover para gráficos de linha
+        showlegend=True, # Mostra a legenda para identificar os alunos
+        template="plotly_white"
+    )
+    st.plotly_chart(fig_plotly2, use_container_width=True)
+    st.write("Este gráfico mostra a mudança individual para cada aluno. Uma linha ascendente indica melhora, descendente indica piora. Passe o mouse sobre os pontos para ver detalhes de cada aluno.")
 
 
     st.subheader("Análise Estatística: Teste t para Amostras Pareadas")
@@ -293,15 +312,17 @@ def run_exercise_3():
     st.write("Grupo B (Controle):", grupo_b)
     st.dataframe(df_grupos)
 
-    st.subheader("Visualização dos Dados (Box Plot):")
-    fig3, ax3 = plt.subplots(figsize=(10, 6))
-    sns.boxplot(x='Grupo', y='Pontuacao', data=df_grupos, ax=ax3, palette='coolwarm')
-    ax3.set_title('Comparação de Pontuações entre Grupo Experimental (A) e Controle (B)')
-    ax3.set_xlabel('Grupo de Ensino')
-    ax3.set_ylabel('Pontuação')
-    ax3.grid(axis='y', linestyle='--', alpha=0.7)
-    st.pyplot(fig3)
-    st.write("O box plot permite comparar as distribuições de pontuação e as medianas de ambos os grupos.")
+    st.subheader("Visualização dos Dados (Box Plot - Interativo):")
+    # Gráfico de Box Plot interativo com Plotly Express
+    fig_plotly3 = px.box(df_grupos, x='Grupo', y='Pontuacao',
+                         title='Comparação de Pontuações entre Grupo Experimental (A) e Controle (B)',
+                         labels={'Grupo': 'Grupo de Ensino', 'Pontuacao': 'Pontuação'},
+                         color='Grupo', # Colore as caixas por grupo
+                         template="plotly_white")
+    fig_plotly3.update_traces(boxpoints='all', jitter=0.3) # Mostra os pontos individuais
+    st.plotly_chart(fig_plotly3, use_container_width=True)
+    st.write("O box plot interativo permite comparar as distribuições de pontuação e as medianas de ambos os grupos. Interaja com o gráfico para explorar os dados.")
+
 
     st.subheader("Análise Estatística: Teste t para Amostras Independentes")
     st.markdown("""
@@ -349,8 +370,14 @@ def run_exercise_3():
 
 # Execução das funções dos exercícios
 if __name__ == "__main__":
+    # st.sidebar.subheader("Navegação") # Opção para adicionar um menu de navegação
+    # exercise_choice = st.sidebar.radio("Escolha um Exercício:", ["Exercício 1", "Exercício 2", "Exercício 3"])
+
+    # if exercise_choice == "Exercício 1":
     run_exercise_1()
+    # elif exercise_choice == "Exercício 2":
     run_exercise_2()
+    # elif exercise_choice == "Exercício 3":
     run_exercise_3()
 
     st.sidebar.title("Sobre a Aplicação")
@@ -362,7 +389,7 @@ if __name__ == "__main__":
         Desenvolvido em Python com as bibliotecas:
         - Streamlit (para a interface web)
         - Pandas (para manipulação de dados)
-        - Matplotlib e Seaborn (para visualização)
+        - Plotly (para visualização interativa)
         - SciPy e Statsmodels (para os testes estatísticos)
 
        
