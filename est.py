@@ -1,398 +1,406 @@
 import streamlit as st
 import pandas as pd
-from scipy.stats import f_oneway, ttest_rel, ttest_ind, levene
-from statsmodels.stats.multicomp import pairwise_tukeyhsd
-import matplotlib.pyplot as plt # Mantemos por enquanto para o layout geral do Streamlit, mas os plots serão Plotly
-import seaborn as sns # Mantemos por enquanto
-import numpy as np # Importar numpy para cálculos
-
-# Importar Plotly para gráficos interativos
+import numpy as np
+import plotly.graph_objects as go
 import plotly.express as px
-import plotly.graph_objects as go # Necessário para o gráfico de mudança individual do Ex. 2
 
-# Configurações gerais do Streamlit
-st.set_page_config(layout="wide", page_title="Análise Estatística de Exercícios")
+# --- Configuração da Página Streamlit ---
+# REMOVIDO o argumento 'icon' para compatibilidade com versões mais antigas do Streamlit
+st.set_page_config(layout="wide", page_title="DOE PFF - Lubrificantes Industriais")
 
-# --- Inicialização do Session State (CORRIGIDO) ---
-# Garante que 'user_custom_name' existe antes de ser usado.
-if 'user_custom_name' not in st.session_state:
-    st.session_state.user_custom_name = "Diógenes Oliveira" # Pode ser seu nome real ou um placeholder
 
-# --- Conteúdo Principal da Aplicação ---
-st.title("📊 Resolução exercícios - Estatística Avançada - UERJ")
-st.write(f"Esta aplicação demonstra a resolução dos exercícios de testes estatísticos que você me apresentou, utilizando Python e Streamlit.")
-st.write("Eng Diógenes Oliveira")
+# --- Funções Auxiliares para Codificação de Fatores ---
+# Converte valores categóricos selecionados para seus códigos -1 ou +1
+def get_coded_value_categorical(factor_name, selected_value):
+    if factor_name == "Tipo de Antioxidante":
+        return -1 if selected_value == "Amínico" else 1
+    elif factor_name == "Tipo de Antidesgaste":
+        return -1 if selected_value == "Com Zinco" else 1
+    elif factor_name == "Tipo de Óleo Base":
+        return -1 if selected_value == "Leve/Médio" else 1
+    return 0
+
+
+# Converte valores numéricos selecionados para seus códigos -1 (min), 0 (centro), +1 (max)
+def get_coded_value_numerical(factor_name, selected_value):
+    if factor_name == "Quantidade de Antioxidante":  # Min=0.2, Centro=0.5, Max=0.8
+        # Ensure selected_value is treated as float for calculation
+        return (float(selected_value) - 0.5) / 0.3
+    elif factor_name == "Quantidade de Antidesgaste":  # Min=0.5, Centro=1.75, Max=3.0
+        return (float(selected_value) - 1.75) / 1.25
+    elif factor_name == "Razão de Óleo Base":  # Min=20, Centro=50, Max=80
+        return (float(selected_value) - 50) / 30
+    return 0
+
+
+# --- Implementação dos Modelos (Baseado nos achados do Artigo) ---
+
+# Modelo preditivo para o Índice de Acidez (IAT) - Baseado na Equação do Artigo
+# Assume que A, B, C, D, E, F são os valores codificados (-1, 0, +1)
+def calculate_iat(A_coded, B_coded, C_coded, D_coded, E_coded, F_coded):
+    # Coeficientes da equação linear do artigo para Acidez
+    # ÍNDICE DE ACIDEZ = 1.92 + 0.03 * A – 0.01 * B + 1.28 * C + 0.99 * D + 0.01 * E + 0.01 * F + 0.02 * AB + 0.03 * AC + 0.05 * AF – 0.03 * BD + 0.91 * BF + 0.03 * ABD – 0.02 * ABF ± 0.17
+
+    iat = (
+            1.92
+            + 0.03 * A_coded
+            - 0.01 * B_coded
+            + 1.28 * C_coded
+            + 0.99 * D_coded
+            + 0.01 * E_coded
+            + 0.01 * F_coded
+            + 0.02 * (A_coded * B_coded)
+            + 0.03 * (A_coded * C_coded)
+            + 0.05 * (A_coded * F_coded)
+            - 0.03 * (B_coded * D_coded)
+            + 0.91 * (B_coded * F_coded)
+            + 0.03 * (A_coded * B_coded * D_coded)  # Interação ABD
+            - 0.02 * (A_coded * B_coded * F_coded)  # Interação ABF
+    )
+    # O artigo menciona +/- 0.17 como erro, o que representa uma faixa de incerteza.
+    error_range = 0.17
+    return iat, error_range
+
+
+# Modelo qualitativo para Viscosidade - Baseado nas tendências discutidas no artigo
+# O artigo afirmou que não foi possível propor um modelo preditivo linear válido devido à curvatura.
+# Esta função reflete as tendências dominantes e a interação A x D.
+def calculate_viscosity_qualitative(A_coded, B_val_actual, C_coded, D_val_actual, E_coded, F_val_actual):
+    # Valores base aproximados da Tabela 18 do artigo para Leve/Médio vs Pesado/Médio
+    base_viscosity = 0.0
+    if E_coded == -1:  # Leve/Médio
+        base_viscosity = 40.0  # Aproximado do range de 30-50 para Leve/Médio
+    else:  # Pesado/Médio
+        base_viscosity = 70.0  # Aproximado do range de 60-80 para Pesado/Médio
+
+    # Efeito da Quantidade de Antidesgaste (D_val_actual)
+    # "o aumento na concentração de antidesgaste promove uma redução na viscosidade do lubrificante"
+    # Adicionando um pequeno efeito negativo direto da quantidade, escalado.
+    D_val_scaled_for_effect = (D_val_actual - 0.5) / 2.5  # Escala de 0 a 1 para o range de D
+    base_viscosity += -3 * D_val_scaled_for_effect  # Penalidade por aumentar D
+
+    # Interação A (Tipo de Antioxidante) x D (Quant. de Antidesgaste) - Figura 40 do artigo
+    # Isso é um ajuste sobre a base.
+    if A_coded == -1:  # Amínico
+        # "viscosidade do lubrificante assume um valor máximo no nível inferior da variável D"
+        # "diminuindo seu valor conforme o aumento da quantidade de antidesgaste"
+        base_viscosity += -8 * D_val_scaled_for_effect  # Acentua a queda com D_val_actual
+    else:  # Fenólico
+        # "viscosidade assume o menor valor no nível inferior da variável D"
+        # "aumentando seu valor conforme o aumento do nível de antidesgaste"
+        base_viscosity += 8 * D_val_scaled_for_effect  # Acentua o aumento com D_val_actual
+
+    # Adicionar uma pequena variação aleatória para simular ruído/variabilidade
+    noise = np.random.uniform(-1, 1)
+    predicted_viscosity = base_viscosity + noise
+
+    # Garantir que a viscosidade esteja dentro de um range razoável observado no artigo (30-87 cSt)
+    return max(28, min(89, predicted_viscosity))
+
+
+# Modelo qualitativo para Desgaste - Baseado nas conclusões do artigo
+# O artigo afirmou que não foi possível propor um modelo preditivo significativo para o desgaste.
+# Esta função ilustra a importância dos aditivos e as tendências qualitativas.
+def calculate_desgaste_qualitative(selected_tipo_antidesgaste, D_val_actual):
+    # O artigo afirma que o óleo base sem aditivo tem desgaste de 0.771 mm
+    # e a média com aditivos é de 0.409 mm.
+
+    # Se "Sem Aditivo Antidesgaste" fosse uma opção, o valor seria 0.771.
+    # Como o usuário SEMPRE seleciona um tipo de aditivo (Com Zinco ou Sem Zinco),
+    # o valor inicial será próximo da média com aditivos.
+    desgaste = 0.409
+
+    # C_coded = -1 (Com Zinco), +1 (Sem Zinco)
+    C_coded = get_coded_value_categorical("Tipo de Antidesgaste", selected_tipo_antidesgaste)
+
+    # "o emprego do Antidesgaste sem Zinco, por conciliar proteção contra desgaste e baixa acidez."
+    # Isso sugere que "Sem Zinco" resulta em um desgaste ligeiramente menor.
+    if C_coded == -1:  # Com Zinco
+        desgaste += 0.015  # Um pouco mais de desgaste
+    else:  # Sem Zinco
+        desgaste -= 0.005  # Um pouco menos de desgaste
+
+    # "bastando acrescentar esse aditivo em sua menor proporção (0,5 %), para conseguir a proteção desejada."
+    # Isso implica que, uma vez que o aditivo é adicionado, a quantidade D_val_actual não tem um grande efeito
+    # de redução adicional no desgaste. Podemos adicionar uma pequena penalidade se a quantidade for muito baixa (mas ainda presente).
+    if D_val_actual < 0.75:  # Se a quantidade for próxima do mínimo (0.5), talvez um leve aumento ou sem mudança
+        desgaste += 0.005  # Pequeno aumento para ilustrar que o mínimo é já eficaz, mas não "super" eficaz.
+
+    # Adicionar uma pequena variação aleatória para simular ruído/variabilidade
+    noise = np.random.uniform(-0.005, 0.005)
+    predicted_desgaste = desgaste + noise
+
+    # Garantir que o desgaste esteja dentro de um range razoável observado no artigo (0.348 - 0.428 com aditivo)
+    return max(0.34, min(0.43, predicted_desgaste))
+
+
+# --- Título e Introdução do Aplicativo ---
+st.title("🧪 Otimização de Formulações de Lubrificantes com PFF")
+st.markdown(
+    "Uma aplicação interativa para explorar os resultados de um experimento de **Planejamento Fatorial Fracionado (PFF)** na formulação de óleos lubrificantes industriais.")
+st.info(
+    "Esta ferramenta simula os resultados discutidos na dissertação de mestrado de Marcelo O.Q. de Almeida (2019), demonstrando a aplicação do DOE para análise de fatores e respostas. Modelos preditivos para acidez, e tendências qualitativas para viscosidade e desgaste.")
+
+# --- Sidebar para Seleção dos Fatores ---
+st.sidebar.header("⚙️ Fatores do Experimento")
+st.sidebar.markdown("Ajuste os níveis de cada fator para observar seu impacto nas propriedades do lubrificante.")
+
+# Fator A: Tipo de Antioxidante
+tipo_antioxidante_options = ["Amínico", "Fenólico"]
+selected_tipo_antioxidante = st.sidebar.selectbox("Tipo de Antioxidante (A)", tipo_antioxidante_options, key="sel_A")
+A_coded = get_coded_value_categorical("Tipo de Antioxidante", selected_tipo_antioxidante)
+
+# Fator B: Quantidade de Antioxidante
+quant_antioxidante_options_values = [0.2, 0.5, 0.8]
+selected_quant_antioxidante = st.sidebar.select_slider("Quantidade de Antioxidante (B) [% peso]",
+                                                       options=quant_antioxidante_options_values,
+                                                       value=0.5, key="sel_B")
+B_coded = get_coded_value_numerical("Quantidade de Antioxidante", selected_quant_antioxidante)
+
+# Fator C: Tipo de Antidesgaste
+tipo_antidesgaste_options = ["Com Zinco", "Sem Zinco"]
+selected_tipo_antidesgaste = st.sidebar.selectbox("Tipo de Antidesgaste (C)", tipo_antidesgaste_options, key="sel_C")
+C_coded = get_coded_value_categorical("Tipo de Antidesgaste", selected_tipo_antidesgaste)
+
+# Fator D: Quantidade de Antidesgaste
+quant_antidesgaste_options_values = [0.5, 1.75, 3.0]
+selected_quant_antidesgaste = st.sidebar.select_slider("Quantidade de Antidesgaste (D) [% peso]",
+                                                       options=quant_antidesgaste_options_values,
+                                                       value=1.75, key="sel_D")
+D_coded = get_coded_value_numerical("Quantidade de Antidesgaste", selected_quant_antidesgaste)
+
+# Fator E: Tipo de Óleo Base
+tipo_oleo_base_options = ["Leve/Médio", "Pesado/Médio"]
+selected_tipo_oleo_base = st.sidebar.selectbox("Tipo de Óleo Base (E)", tipo_oleo_base_options, key="sel_E")
+E_coded = get_coded_value_categorical("Tipo de Óleo Base", selected_tipo_oleo_base)
+
+# Fator F: Razão de Óleo Base
+razao_oleo_base_options_values = [20, 50, 80]
+selected_razao_oleo_base = st.sidebar.select_slider("Razão de Óleo Base (F) [%]",
+                                                    options=razao_oleo_base_options_values,
+                                                    value=50, key="sel_F")
+F_coded = get_coded_value_numerical("Razão de Óleo Base", selected_razao_oleo_base)
+
+st.sidebar.markdown("---")
+st.sidebar.write("ℹ️ Quantidade de Anticorrosivo: **1.5% peso (fixo)**")
+st.sidebar.markdown("---")
+
+# --- Cálculo das Respostas com base nas Seleções do Usuário ---
+# Corrigido: As chaves do dicionário devem corresponder aos nomes dos parâmetros de calculate_iat
+current_coded_params_for_iat = {
+    'A_coded': A_coded, 'B_coded': B_coded, 'C_coded': C_coded,
+    'D_coded': D_coded, 'E_coded': E_coded, 'F_coded': F_coded
+}
+
+iat_predicted, iat_error = calculate_iat(**current_coded_params_for_iat)
+viscosity_predicted = calculate_viscosity_qualitative(A_coded, selected_quant_antioxidante, C_coded,
+                                                      selected_quant_antidesgaste, E_coded, selected_razao_oleo_base)
+desgaste_predicted = calculate_desgaste_qualitative(selected_tipo_antidesgaste, selected_quant_antidesgaste)
+
+st.header("📊 Resultados Preditos (Simulados)")
+
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    st.subheader("Índice de Acidez Total (IAT)")
+    st.markdown(f"**{iat_predicted:.2f} ± {iat_error:.2f} mg KOH/g**")
+    st.success(f"**Modelo estatisticamente significativo** com R² = 0.9938.")
+
+with col2:
+    st.subheader("Viscosidade Cinemática (40°C)")
+    st.markdown(f"**{viscosity_predicted:.2f} cSt**")
+    st.warning(
+        "Modelo qualitativo: **Curvatura significativa** no estudo original. Predição baseada em tendências observadas no artigo.")
+
+with col3:
+    st.subheader("Desgaste por 4 Esferas")
+    st.markdown(f"**{desgaste_predicted:.3f} mm**")
+    st.error(
+        "Modelo qualitativo: **Sem modelo preditivo significativo** no estudo original. Valor ilustrativo de tendências e comparação com óleo base.")
 
 st.markdown("---")
 
-## Função para o Exercício 1: ANOVA (Comparação de 3 Métodos de Ensino)
-def run_exercise_1():
-    st.header("1. Comparação de Três Métodos de Ensino (ANOVA)")
-    st.markdown("""
-    **Problema:** Uma escola está testando três métodos diferentes de ensino para melhorar o desempenho dos alunos em matemática.
-    Após 1 semestre, 5 alunos de cada grupo foram submetidos à mesma prova de matemática, com pontuação de 0 a 100.
-    O objetivo é verificar se há diferença significativa no desempenho médio dos alunos entre os três métodos de ensino (5% de significância).
-    """)
-
-    # Dados do problema
-    data = {
-        'Metodo': ['A'] * 5 + ['B'] * 5 + ['C'] * 5,
-        'Pontuacao': [70, 65, 60, 72, 68, 80, 85, 75, 78, 82, 90, 95, 85, 88, 92]
-    }
-    df = pd.DataFrame(data)
-
-    st.subheader("Dados Brutos:")
-    st.dataframe(df)
-
-    st.subheader("Visualização dos Dados (Box Plot - Interativo):")
-    # Gráfico de Box Plot interativo com Plotly Express
-    fig_plotly1 = px.box(df, x='Metodo', y='Pontuacao',
-                         title='Desempenho dos Alunos por Método de Ensino',
-                         labels={'Metodo': 'Método de Ensino', 'Pontuacao': 'Pontuação'},
-                         color='Metodo', # Colore as caixas por método
-                         template="plotly_white") # Define um template limpo
-    fig_plotly1.update_traces(boxpoints='all', jitter=0.3) # Mostra os pontos individuais (jitter)
-    st.plotly_chart(fig_plotly1, use_container_width=True) # Exibe o gráfico no Streamlit
-    st.write("O box plot interativo nos permite visualizar a distribuição das pontuações para cada método, incluindo medianas, quartis e pontos individuais. Passe o mouse sobre as caixas e pontos para ver detalhes.")
-
-    st.subheader("Análise Estatística: ANOVA")
-    st.markdown("""
-    Para comparar as médias de três ou mais grupos independentes, utilizamos a **Análise de Variância (ANOVA)**.
-
-    *   **Hipótese Nula (H₀):** As médias de desempenho dos alunos são iguais para os três métodos de ensino (μA = μB = μC).
-    *   **Hipótese Alternativa (H₁):** Pelo menos uma das médias de desempenho dos alunos é diferente das outras.
-    *   **Nível de Significância (α):** 0.05 (5%).
-    """)
-
-    # Preparar os dados para ANOVA
-    metodo_a = df[df['Metodo'] == 'A']['Pontuacao']
-    metodo_b = df[df['Metodo'] == 'B']['Pontuacao']
-    metodo_c = df[df['Metodo'] == 'C']['Pontuacao']
-
-    # --- Detalhamento Matemático da ANOVA ---
-    with st.expander("Ver Detalhes Matemáticos da ANOVA"):
-        st.markdown("### Cálculos Manuais da ANOVA")
-
-        # 1. Médias dos Grupos e Média Geral
-        n = 5 # Número de observações por grupo
-        N = len(df) # Número total de observações
-        k = 3 # Número de grupos
-
-        mean_a = metodo_a.mean()
-        mean_b = metodo_b.mean()
-        mean_c = metodo_c.mean()
-        mean_total = df['Pontuacao'].mean()
-
-        st.write(f"**1. Médias dos Grupos e Média Geral:**")
-        st.write(f"  - Média Método A (x̄_A): `{mean_a:.2f}`")
-        st.write(f"  - Média Método B (x̄_B): `{mean_b:.2f}`")
-        st.write(f"  - Média Método C (x̄_C): `{mean_c:.2f}`")
-        st.write(f"  - Média Geral (x̄_total): `{mean_total:.2f}`")
-        st.write(f"  - Número de observações por grupo (n): `{n}`")
-        st.write(f"  - Número total de observações (N): `{N}`")
-        st.write(f"  - Número de grupos (k): `{k}`")
-
-        # 2. Somas dos Quadrados (SS)
-        # SST: Sum of Squares Total
-        sst = np.sum((df['Pontuacao'] - mean_total)**2)
-
-        # SSB: Sum of Squares Between (entre grupos)
-        ssb = n * (mean_a - mean_total)**2 + \
-              n * (mean_b - mean_total)**2 + \
-              n * (mean_c - mean_total)**2
-
-        # SSW: Sum of Squares Within (dentro dos grupos)
-        ssw_a = np.sum((metodo_a - mean_a)**2)
-        ssw_b = np.sum((metodo_b - mean_b)**2)
-        ssw_c = np.sum((metodo_c - mean_c)**2)
-        ssw = ssw_a + ssw_b + ssw_c
-
-        st.write(f"**2. Somas dos Quadrados (SS):**")
-        st.write(f"  - Soma dos Quadrados Total (SST): `{sst:.2f}`")
-        st.write(f"  - Soma dos Quadrados Entre Grupos (SSB): `{ssb:.2f}`")
-        st.write(f"  - Soma dos Quadrados Dentro dos Grupos (SSW): `{ssw:.2f}`")
-        st.write(f"  _(Verificação: SSB + SSW = {ssb + ssw:.2f}, que é aproximadamente SST)_")
-
-        # 3. Graus de Liberdade (df)
-        df_between = k - 1
-        df_within = N - k
-        df_total = N - 1
-
-        st.write(f"**3. Graus de Liberdade (df):**")
-        st.write(f"  - Graus de Liberdade Entre Grupos (df_between): `{df_between}`")
-        st.write(f"  - Graus de Liberdade Dentro dos Grupos (df_within): `{df_within}`")
-        st.write(f"  - Graus de Liberdade Total (df_total): `{df_total}`")
-        st.write(f"  _(Verificação: df_between + df_within = {df_between + df_within}, que é igual a df_total)_")
-
-        # 4. Quadrados Médios (MS)
-        msb = ssb / df_between
-        msw = ssw / df_within
-
-        st.write(f"**4. Quadrados Médios (MS):**")
-        st.write(f"  - Quadrado Médio Entre Grupos (MSB): `{msb:.2f}`")
-        st.write(f"  - Quadrado Médio Dentro dos Grupos (MSW): `{msw:.2f}`")
-
-        # 5. Estatística F
-        f_calculated = msb / msw
-
-        st.write(f"**5. Estatística F Calculada:**")
-        st.write(f"  - F = MSB / MSW = `{msb:.2f} / {msw:.2f} = {f_calculated:.2f}`")
-        st.markdown("---")
-
-    # Realizar o teste ANOVA (usando scipy para confirmar e obter p-valor preciso)
-    f_statistic, p_value = f_oneway(metodo_a, metodo_b, metodo_c)
-
-    st.write(f"**Estatística F da ANOVA (calculada por SciPy):** `{f_statistic:.2f}`")
-    st.write(f"**Valor p da ANOVA (calculada por SciPy):** `{p_value:.3f}`")
-    st.write(f"_(Note que os valores calculados manualmente e os de SciPy são consistentes, pequenas diferenças podem ser devido a arredondamento)_")
-
-
-    st.subheader("Interpretação dos Resultados da ANOVA:")
-    if p_value < 0.05:
-        st.success(f"Como o valor p ({p_value:.3f}) é menor que o nível de significância (0.05), rejeitamos a Hipótese Nula.")
-        st.write("Isso indica que há uma **diferença estatisticamente significativa** no desempenho médio dos alunos entre os métodos de ensino. Ou seja, pelo menos um método difere dos outros.")
-        st.subheader("Teste Post-Hoc (Tukey HSD):")
-        st.markdown("Para identificar *quais* grupos são diferentes entre si, realizamos um Teste Post-Hoc, como o **Teste de Tukey HSD**.")
-
-        # --- Detalhamento Matemático do Tukey HSD ---
-        with st.expander("Ver Detalhes Matemáticos do Tukey HSD"):
-            st.markdown("### Cálculos Manuais do Tukey HSD")
-
-            st.write(f"**Requisitos:**")
-            st.write(f"  - Médias dos grupos: A={mean_a:.2f}, B={mean_b:.2f}, C={mean_c:.2f}")
-            st.write(f"  - Observações por grupo (n): `{n}`")
-            st.write(f"  - Quadrado Médio Dentro dos Grupos (MSW): `{msw:.2f}`")
-            st.write(f"  - Graus de Liberdade Dentro dos Grupos (df_within): `{df_within}`")
-            st.write(f"  - Nível de Significância (α): `0.05`")
-
-            # Calcular o Erro Padrão (SE) para as Diferenças
-            se_tukey = np.sqrt(msw / n)
-            st.write(f"**1. Calcular o Erro Padrão (SE) para as Diferenças:**")
-            st.write(f"  - `SE = √(MSW / n) = √({msw:.2f} / {n}) = {se_tukey:.4f}`")
-
-            # Encontrar o Valor Crítico da Amplitude Studentizada (q_alpha)
-            # Para k=3, df=12, alpha=0.05, q_alpha = 3.77 (valor de tabela)
-            # Nota: qsturng pode ser usado para calcular, mas para simplicidade didática, usamos o valor tabelado.
-            q_alpha = 3.77
-            st.write(f"**2. Encontrar o Valor Crítico da Amplitude Studentizada (q_alpha):**")
-            st.write(f"  - Para α=0.05, k={k} grupos e df_within={df_within}, o valor de `q_alpha` da tabela da Amplitude Studentizada é aproximadamente `{q_alpha}`.")
-
-            # Calcular a Diferença Significativa Honesta (HSD)
-            hsd_calculated = q_alpha * se_tukey
-            st.write(f"**3. Calcular a Diferença Significativa Honesta (HSD):**")
-            st.write(f"  - `HSD = q_alpha * SE = {q_alpha} * {se_tukey:.4f} = {hsd_calculated:.3f}`")
-            st.write(f"  _Qualquer diferença absoluta entre médias de grupos maior que `{hsd_calculated:.3f}` é considerada estatisticamente significativa._")
-
-
-            # Realizar as Comparações Pairwise
-            diff_ab = abs(mean_a - mean_b)
-            diff_ac = abs(mean_a - mean_c)
-            diff_bc = abs(mean_b - mean_c)
-
-            st.write(f"**4. Realizar as Comparações Pairwise (Par a Par):**")
-            st.write(f"  - **Método A vs. B:** `|{mean_a:.2f} - {mean_b:.2f}| = {diff_ab:.2f}`. Como `{diff_ab:.2f} > {hsd_calculated:.3f}`: **Diferença Significativa**")
-            st.write(f"  - **Método A vs. C:** `|{mean_a:.2f} - {mean_c:.2f}| = {diff_ac:.2f}`. Como `{diff_ac:.2f} > {hsd_calculated:.3f}`: **Diferença Significativa**")
-            st.write(f"  - **Método B vs. C:** `|{mean_b:.2f} - {mean_c:.2f}| = {diff_bc:.2f}`. Como `{diff_bc:.2f} > {hsd_calculated:.3f}`: **Diferença Significativa**")
-            st.markdown("---")
-
-        tukey_result = pairwise_tukeyhsd(endog=df['Pontuacao'], groups=df['Metodo'], alpha=0.05)
-        st.write(tukey_result)
-        st.markdown("""
-        Na tabela do Tukey HSD:
-        *   `reject=True` indica que há uma diferença significativa entre o par de grupos.
-        *   `reject=False` indica que não há evidência de diferença significativa entre o par de grupos.
-        """)
-    else:
-        st.info(f"Como o valor p ({p_value:.3f}) é maior ou igual ao nível de significância (0.05), não rejeitamos a Hipótese Nula.")
-        st.write("Isso sugere que não há evidência suficiente para afirmar que existe uma diferença significativa no desempenho médio dos alunos entre os métodos de ensino.")
-    st.markdown("---")
-
-## Função para o Exercício 2: Teste t Pareado (Programa de Reforço)
-def run_exercise_2():
-    st.header("2. Efetividade de um Programa de Reforço (Teste t Pareado)")
-    st.markdown("""
-    **Problema:** Uma escola aplica um programa intensivo de reforço por 8 semanas para melhorar a nota em matemática de 10 alunos. As notas foram registradas antes (pré) e depois (pós) do programa.
-    O objetivo é verificar se o Programa foi efetivo (5% de significância).
-    """)
-
-    # Dados do problema
-    data_prog = {
-        'Aluno': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
-        'Pre': [65, 70, 68, 72, 60, 75, 69, 71, 66, 64],
-        'Pos': [70, 74, 72, 78, 65, 80, 73, 75, 70, 68]
-    }
-    df_prog = pd.DataFrame(data_prog)
-    df_prog['Diferenca'] = df_prog['Pos'] - df_prog['Pre']
-
-    st.subheader("Dados Brutos:")
-    st.dataframe(df_prog)
-
-    st.subheader("Visualização dos Dados (Mudança Individual Pré-Pós - Interativo):")
-    # Gráfico interativo de mudança individual com Plotly Graph Objects
-    fig_plotly2 = go.Figure()
-    for index, row in df_prog.iterrows():
-        fig_plotly2.add_trace(go.Scatter(
-            x=['Pré-Programa', 'Pós-Programa'],
-            y=[row['Pre'], row['Pos']],
-            mode='lines+markers',
-            name=f"Aluno {row['Aluno']}",
-            line=dict(color='gray', width=1),
-            marker=dict(size=8),
-            hovertemplate=
-                "<b>Aluno:</b> %{text}<br>" +
-                "<b>Fase:</b> %{x}<br>" +
-                "<b>Pontuação:</b> %{y}<extra></extra>", # Adiciona o nome do Aluno no hover
-            text=[f"Aluno {row['Aluno']}", f"Aluno {row['Aluno']}"]
-        ))
-
-    fig_plotly2.update_layout(
-        title='Mudança na Pontuação de Matemática por Aluno',
-        xaxis_title='Período',
-        yaxis_title='Pontuação',
-        hovermode="x unified", # Melhor hover para gráficos de linha
-        showlegend=True, # Mostra a legenda para identificar os alunos
-        template="plotly_white"
-    )
-    st.plotly_chart(fig_plotly2, use_container_width=True)
-    st.write("Este gráfico mostra a mudança individual para cada aluno. Uma linha ascendente indica melhora, descendente indica piora. Passe o mouse sobre os pontos para ver detalhes de cada aluno.")
-
-
-    st.subheader("Análise Estatística: Teste t para Amostras Pareadas")
-    st.markdown("""
-    Para comparar as médias de duas amostras relacionadas (os mesmos indivíduos medidos antes e depois de uma intervenção), utilizamos o **Teste t para Amostras Pareadas**.
-
-    *   **Hipótese Nula (H₀):** A média das diferenças (Pós - Pré) é igual a zero (μ_diff = 0). O programa não teve efeito.
-    *   **Hipótese Alternativa (H₁):** A média das diferenças (Pós - Pré) é maior que zero (μ_diff > 0). O programa foi efetivo em aumentar as notas (teste unilateral).
-    *   **Nível de Significância (α):** 0.05 (5%).
-    """)
-
-    # Realizar o Teste t Pareado
-    t_statistic, p_value_bilateral = ttest_rel(df_prog['Pos'], df_prog['Pre'])
-
-    # Para teste unilateral (H1: Pos > Pre), dividimos o p-value bilateral por 2
-    # e verificamos a direção da média das diferenças.
-    mean_diff = df_prog['Diferenca'].mean()
-    if mean_diff > 0:
-        p_value_unilateral = p_value_bilateral / 2
-    else:
-        p_value_unilateral = 1 - (p_value_bilateral / 2) # Se a média da diferença for negativa ou zero, não há suporte para H1
-
-    st.write(f"**Estatística t do Teste Pareado:** `{t_statistic:.2f}`")
-    st.write(f"**Valor p (unilateral) do Teste Pareado:** `{p_value_unilateral:.3f}`")
-
-    st.subheader("Interpretação dos Resultados do Teste t Pareado:")
-    if p_value_unilateral < 0.05 and mean_diff > 0:
-        st.success(f"Como o valor p unilateral ({p_value_unilateral:.3f}) é menor que o nível de significância (0.05) e a média das diferenças é positiva ({mean_diff:.2f}), rejeitamos a Hipótese Nula.")
-        st.write("Isso indica que o programa de reforço foi **estatisticamente efetivo** em aumentar as notas dos alunos.")
-    else:
-        st.info(f"Como o valor p unilateral ({p_value_unilateral:.3f}) é maior ou igual ao nível de significância (0.05), ou a média das diferenças não é positiva, não rejeitamos a Hipótese Nula.")
-        st.write("Isso sugere que não há evidência suficiente para afirmar que o programa de reforço foi efetivo em aumentar as notas.")
-    st.markdown("---")
-
-## Função para o Exercício 3: Teste t Independente (Grupo Experimental vs. Controle)
-def run_exercise_3():
-    st.header("3. Avaliação de Novo Método de Ensino (Grupo Experimental vs. Controle - Teste t Independente)")
-    st.markdown("""
-    **Problema:** Uma escola quer avaliar se um novo método de ensino (Grupo A — método experimental) aumenta as notas de matemática em comparação ao método tradicional (Grupo B — controle). Foram selecionados 8 alunos aleatoriamente para cada grupo e, após o curso, aplicou-se um teste padronizado de matemática.
-    Nível de significância: α = 0,05.
-    """)
-
-    # Dados do problema
-    grupo_a = [78, 82, 85, 90, 74, 88, 79, 84]
-    grupo_b = [72, 75, 70, 68, 74, 69, 73, 71]
-
-    # Criar DataFrame para visualização
-    df_grupos = pd.DataFrame({
-        'Grupo': ['A'] * len(grupo_a) + ['B'] * len(grupo_b),
-        'Pontuacao': grupo_a + grupo_b
-    })
-
-    st.subheader("Dados Brutos:")
-    st.write("Grupo A (Experimental):", grupo_a)
-    st.write("Grupo B (Controle):", grupo_b)
-    st.dataframe(df_grupos)
-
-    st.subheader("Visualização dos Dados (Box Plot - Interativo):")
-    # Gráfico de Box Plot interativo com Plotly Express
-    fig_plotly3 = px.box(df_grupos, x='Grupo', y='Pontuacao',
-                         title='Comparação de Pontuações entre Grupo Experimental (A) e Controle (B)',
-                         labels={'Grupo': 'Grupo de Ensino', 'Pontuacao': 'Pontuação'},
-                         color='Grupo', # Colore as caixas por grupo
-                         template="plotly_white")
-    fig_plotly3.update_traces(boxpoints='all', jitter=0.3) # Mostra os pontos individuais
-    st.plotly_chart(fig_plotly3, use_container_width=True)
-    st.write("O box plot interativo permite comparar as distribuições de pontuação e as medianas de ambos os grupos. Interaja com o gráfico para explorar os dados.")
-
-
-    st.subheader("Análise Estatística: Teste t para Amostras Independentes")
-    st.markdown("""
-    Para comparar as médias de dois grupos independentes, utilizamos o **Teste t para Amostras Independentes**. Antes, verificamos a homogeneidade das variâncias com o Teste de Levene.
-
-    *   **Hipótese Nula (H₀):** A média de pontuação do Grupo A é menor ou igual à média de pontuação do Grupo B (μA ≤ μB). Não há aumento nas notas.
-    *   **Hipótese Alternativa (H₁):** A média de pontuação do Grupo A é maior que a média de pontuação do Grupo B (μA > μB). O novo método aumenta as notas (teste unilateral).
-    *   **Nível de Significância (α):** 0.05 (5%).
-    """)
-
-    st.markdown("### Verificação de Homogeneidade das Variâncias (Teste de Levene):")
-    stat_levene, p_levene = levene(grupo_a, grupo_b)
-    st.write(f"**Estatística de Levene:** `{stat_levene:.2f}`")
-    st.write(f"**Valor p do Teste de Levene:** `{p_levene:.3f}`")
-
-    equal_variances = p_levene >= 0.05
-    if equal_variances:
-        st.info("Como o valor p do Teste de Levene é maior ou igual a 0.05, não rejeitamos a hipótese nula de variâncias iguais. O Teste t será executado assumindo variâncias iguais.")
-    else:
-        st.warning("Como o valor p do Teste de Levene é menor que 0.05, rejeitamos a hipótese nula de variâncias iguais. O Teste t será executado utilizando a correção de Welch (variâncias desiguais).")
-
-    st.markdown("### Realizando o Teste t Independente:")
-    t_statistic, p_value_bilateral = ttest_ind(grupo_a, grupo_b, equal_var=equal_variances)
-
-    mean_a = sum(grupo_a) / len(grupo_a)
-    mean_b = sum(grupo_b) / len(grupo_b)
-
-    # Para teste unilateral (H1: media_A > media_B)
-    if mean_a > mean_b:
-        p_value_unilateral = p_value_bilateral / 2
-    else:
-        p_value_unilateral = 1 - (p_value_bilateral / 2) # Não há suporte para H1 na direção desejada
-
-    st.write(f"**Estatística t do Teste Independente:** `{t_statistic:.2f}`")
-    st.write(f"**Valor p (unilateral) do Teste Independente:** `{p_value_unilateral:.3f}`")
-
-    st.subheader("Interpretação dos Resultados do Teste t Independente:")
-    if p_value_unilateral < 0.05 and mean_a > mean_b:
-        st.success(f"Como o valor p unilateral ({p_value_unilateral:.3f}) é menor que o nível de significância (0.05) e a média do Grupo A ({mean_a:.2f}) é maior que a do Grupo B ({mean_b:.2f}), rejeitamos a Hipótese Nula.")
-        st.write("Isso indica que o novo método de ensino (Grupo A) **aumentou as notas de forma estatisticamente significativa** em comparação ao método tradicional (Grupo B).")
-    else:
-        st.info(f"Como o valor p unilateral ({p_value_unilateral:.3f}) é maior ou igual ao nível de significância (0.05), ou a média do Grupo A não é maior que a do Grupo B, não rejeitamos a Hipótese Nula.")
-        st.write("Isso sugere que não há evidência suficiente para afirmar que o novo método de ensino (Grupo A) aumenta as notas em comparação ao método tradicional (Grupo B).")
-    st.markdown("---")
-
-# Execução das funções dos exercícios
-if __name__ == "__main__":
-    # st.sidebar.subheader("Navegação") # Opção para adicionar um menu de navegação
-    # exercise_choice = st.sidebar.radio("Escolha um Exercício:", ["Exercício 1", "Exercício 2", "Exercício 3"])
-
-    # if exercise_choice == "Exercício 1":
-    run_exercise_1()
-    # elif exercise_choice == "Exercício 2":
-    run_exercise_2()
-    # elif exercise_choice == "Exercício 3":
-    run_exercise_3()
-
-    st.sidebar.title("Sobre a Aplicação")
-    st.sidebar.info(
-        """
-        Esta aplicação foi criada para demonstrar a aplicação de diferentes testes estatísticos
-        (ANOVA, Teste t Pareado, Teste t Independente) utilizando dados de exemplos.
-
-        Desenvolvido em Python com as bibliotecas:
-        - Streamlit (para a interface web)
-        - Pandas (para manipulação de dados)
-        - Plotly (para visualização interativa)
-        - SciPy e Statsmodels (para os testes estatísticos)
-
-       
-        """
-
-    )
+st.header("📈 Análise de Efeitos e Interações")
+st.markdown(
+    "Estes gráficos ilustram o impacto dos fatores nas respostas. Para o IAT, eles refletem o modelo linear. Para viscosidade e desgaste, as tendências são baseadas nas discussões e observações qualitativas do artigo.")
+
+# --- Gráfico de Perturbação para IAT ---
+st.subheader("1. Gráfico de Perturbação para Índice de Acidez (IAT)")
+st.info(
+    "Este gráfico mostra como a acidez predita muda quando cada fator é variado individualmente de seu valor mais baixo para o mais alto (ou entre categorias), enquanto os outros fatores são mantidos nos valores selecionados atualmente na sidebar.")
+
+perturbation_data = []
+
+# Definir os fatores e seus níveis para a perturbação
+# Cada tupla agora inclui o nome exato do parâmetro em calculate_iat
+factors_for_perturbation = [
+    ("Tipo de Antioxidante (A)", tipo_antioxidante_options, "categorical", "A_coded"),
+    ("Quantidade de Antioxidante (B)", quant_antioxidante_options_values, "numerical", "B_coded"),
+    ("Tipo de Antidesgaste (C)", tipo_antidesgaste_options, "categorical", "C_coded"),
+    ("Quantidade de Antidesgaste (D)", quant_antidesgaste_options_values, "numerical", "D_coded"),
+    ("Tipo de Óleo Base (E)", tipo_oleo_base_options, "categorical", "E_coded"),
+    ("Razão de Óleo Base (F)", razao_oleo_base_options_values, "numerical", "F_coded"),
+]
+
+# Recalcular IAT para cada fator em seus extremos (mantendo os outros no valor selecionado)
+for factor_full_name, levels, factor_type, iat_param_name in factors_for_perturbation:
+    if factor_type == "categorical":
+        for level_val_str in levels:
+            temp_params = current_coded_params_for_iat.copy()
+            # Obter o valor codificado para o nível específico do fator sendo perturbado
+            temp_params[iat_param_name] = get_coded_value_categorical(factor_full_name.split(' (')[0], level_val_str)
+            predicted_val, _ = calculate_iat(**temp_params)
+            perturbation_data.append({
+                "Fator": factor_full_name,
+                "Nível": level_val_str,
+                "Acidez Predita": predicted_val,
+            })
+    else:  # Fatores Numéricos (Min e Max para a linha)
+        # Usar min e max dos níveis reais para calcular os pontos da linha
+        min_val_coded = get_coded_value_numerical(factor_full_name.split(' (')[0], levels[0])
+        max_val_coded = get_coded_value_numerical(factor_full_name.split(' (')[0], levels[-1])
+
+        # Ponto Mínimo do fator
+        temp_params_min = current_coded_params_for_iat.copy()
+        temp_params_min[iat_param_name] = min_val_coded
+        predicted_min, _ = calculate_iat(**temp_params_min)
+        perturbation_data.append({
+            "Fator": factor_full_name,
+            "Nível": str(levels[0]),  # Converter para string para o eixo X
+            "Acidez Predita": predicted_min,
+        })
+
+        # Ponto Máximo do fator
+        temp_params_max = current_coded_params_for_iat.copy()
+        temp_params_max[iat_param_name] = max_val_coded
+        predicted_max, _ = calculate_iat(**temp_params_max)
+        perturbation_data.append({
+            "Fator": factor_full_name,
+            "Nível": str(levels[-1]),  # Converter para string para o eixo X
+            "Acidez Predita": predicted_max,
+        })
+
+df_perturbation = pd.DataFrame(perturbation_data)
+
+fig_perturbation = go.Figure()
+
+# Adicionar as linhas de perturbação
+for factor in df_perturbation['Fator'].unique():
+    df_factor = df_perturbation[df_perturbation['Fator'] == factor]
+    fig_perturbation.add_trace(go.Scatter(x=df_factor['Nível'], y=df_factor['Acidez Predita'],
+                                          mode='lines+markers', name=factor,
+                                          marker=dict(size=8)))
+
+# Adicionar o ponto da seleção atual para cada linha
+# Usamos os valores atualmente selecionados (reais) para os nomes dos níveis no eixo X
+current_iat_val_at_selection, _ = calculate_iat(**current_coded_params_for_iat)
+
+# Mapear os valores selecionados (reais) para as chaves usadas no gráfico de perturbação (Nível)
+# Garante que os valores numéricos sejam convertidos para string para corresponder ao eixo X
+current_selection_display_map = {
+    "Tipo de Antioxidante (A)": selected_tipo_antioxidante,
+    "Quantidade de Antioxidante (B)": str(selected_quant_antioxidante),
+    "Tipo de Antidesgaste (C)": selected_tipo_antidesgaste,
+    "Quantidade de Antidesgaste (D)": str(selected_quant_antidesgaste),
+    "Tipo de Óleo Base (E)": selected_tipo_oleo_base,
+    "Razão de Óleo Base (F)": str(selected_razao_oleo_base),
+}
+
+for factor_full_name in df_perturbation['Fator'].unique():
+    fig_perturbation.add_trace(go.Scatter(
+        x=[current_selection_display_map[factor_full_name]],
+        y=[current_iat_val_at_selection],
+        mode='markers',
+        marker=dict(color='black', size=10, symbol='x'),
+        name=f"Seleção Atual ({factor_full_name.split(' (')[1][0]})",
+        showlegend=False  # Não mostrar na legenda principal para evitar repetição
+    ))
+
+fig_perturbation.update_layout(
+    xaxis_title="Nível do Fator (Mínimo/Máximo ou Categoria)",
+    yaxis_title="Acidez Predita (mg KOH/g)",
+    title="Gráfico de Perturbação para Índice de Acidez (IAT)",
+    legend_title="Fator",
+    hovermode="x unified"
+)
+st.plotly_chart(fig_perturbation, use_container_width=True)
+
+st.markdown("---")
+
+# --- Gráfico de Interação Qualitativa (A x D) para Viscosidade ---
+st.subheader("2. Interação Qualitativa: Tipo de Antioxidante (A) vs. Quantidade de Antidesgaste (D) na Viscosidade")
+st.warning(
+    "Este gráfico representa visualmente a interação discutida no artigo (Figura 40), utilizando valores aproximados do modelo qualitativo para a viscosidade. **Lembre-se da curvatura significativa** no estudo original para esta resposta.")
+
+interaction_data = []
+quant_antidesgaste_levels_actual = [0.5, 3.0]  # Níveis reais Mínimo e Máximo para Quant. de Antidesgaste (D)
+tipo_antioxidante_levels_str = ["Amínico", "Fenólico"]  # Níveis para Tipo de Antioxidante (A)
+
+for A_val_str in tipo_antioxidante_levels_str:
+    A_coded_for_visc = get_coded_value_categorical("Tipo de Antioxidante", A_val_str)
+    for D_val_float in quant_antidesgaste_levels_actual:
+        visc = calculate_viscosity_qualitative(A_coded_for_visc, selected_quant_antioxidante,
+                                               C_coded, D_val_float, E_coded, selected_razao_oleo_base)
+        interaction_data.append({
+            "Tipo de Antioxidante": A_val_str,
+            "Quantidade de Antidesgaste": D_val_float,
+            "Viscosidade Predita": visc
+        })
+
+df_interaction = pd.DataFrame(interaction_data)
+
+fig_interaction = px.line(df_interaction, x="Quantidade de Antidesgaste", y="Viscosidade Predita",
+                          color="Tipo de Antioxidante", markers=True,
+                          title="Interação A x D para Viscosidade (Qualitativo)",
+                          hover_data={"Quantidade de Antidesgaste": True, "Viscosidade Predita": ':.2f',
+                                      "Tipo de Antioxidante": True})
+fig_interaction.update_layout(
+    xaxis_title="Quantidade de Antidesgaste (% peso)",
+    yaxis_title="Viscosidade Predita (cSt)",
+    legend_title="Tipo de Antioxidante",
+    hovermode="x unified"
+)
+st.plotly_chart(fig_interaction, use_container_width=True)
+
+st.markdown("---")
+
+# --- Comparativo Qualitativo de Desgaste ---
+st.subheader("3. Comparativo Qualitativo de Desgaste por 4 Esferas")
+st.warning(
+    "Esta seção ilustra a importância fundamental da presença de aditivos antidesgaste, conforme as conclusões do artigo. **Lembre-se que não foi encontrado um modelo preditivo significativo para o desgaste** no estudo original.")
+
+desgaste_comparison_data = [
+    {"Condição": "Óleo Base sem Aditivo Antidesgaste", "Desgaste (mm)": 0.771},
+    {"Condição": "Com Aditivo Antidesgaste (Média Observada)", "Desgaste (mm)": 0.409},
+    {"Condição": f"Sua Seleção: {selected_tipo_antidesgaste} ({selected_quant_antidesgaste}%)",
+     "Desgaste (mm)": desgaste_predicted}
+]
+df_desgaste_comparison = pd.DataFrame(desgaste_comparison_data)
+
+fig_desgaste = px.bar(df_desgaste_comparison, x="Condição", y="Desgaste (mm)",
+                      title="Comparativo de Desgaste (Qualitativo)",
+                      color="Condição",
+                      color_discrete_map={
+                          "Óleo Base sem Aditivo Antidesgaste": "red",
+                          "Com Aditivo Antidesgaste (Média Observada)": "lightgray",
+                          f"Sua Seleção: {selected_tipo_antidesgaste} ({selected_quant_antidesgaste}%)": "blue"
+                      })
+fig_desgaste.update_layout(yaxis_title="Desgaste (mm)")
+st.plotly_chart(fig_desgaste, use_container_width=True)
+
+st.markdown("---")
+st.markdown("### 📚 Referência")
+st.markdown(
+    "Almeida, M. O. Q. (2019). *Avaliação das Influências de Variáveis Composicionais na Formulação de Óleos Lubrificantes Industriais Usando Design de Experimentos*. Dissertação de Mestrado, Universidade Federal do Rio de Janeiro.")
+
+# --- Rodapé ---
+st.markdown("---")
+st.markdown(
+    "<p style='text-align: center; color: gray; font-size: small;'>"
+    "Desenvolvida por <b>Diógenes Oliveira</b> e <b>Carlos Marins</b>, "
+    "alunos do Mestrado em Engenharia Ambiental da UERJ, "
+    "para a disciplina de Design of Experiments (DOE) ministrada pelo "
+    "Prof. Dr. Nilo Antônio de Souza Sampaio. © 2026."
+    "</p>",
+    unsafe_allow_html=True
+)
